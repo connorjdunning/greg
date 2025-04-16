@@ -1,6 +1,6 @@
+
 package com.gregbot;
 
-import static net.dv8tion.jda.api.interactions.commands.OptionType.INTEGER;
 import static net.dv8tion.jda.api.interactions.commands.OptionType.STRING;
 
 import java.nio.file.Files;
@@ -11,6 +11,11 @@ import java.time.format.DateTimeFormatter;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Random;
+
+// https://www.baeldung.com/quartz
+import org.quartz.Scheduler;
+import org.quartz.SchedulerFactory;
+import org.quartz.impl.StdSchedulerFactory;
 
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
@@ -33,20 +38,27 @@ import net.dv8tion.jda.api.requests.restaction.CommandListUpdateAction;
 public class App extends ListenerAdapter {
 
     // TODO add config file for these
-    private static final long SERVER_ID = 1273033154826997790L;
     private static final String NAME = "greg";
     private static final String URL = "jdbc:sqlite:" + NAME;
+    private static final String SERVER_ID = "1273033154826997790";
+    private static final String EVENT_FEED_ID = "1356146914252296237";
 
     Random rand = new Random();
-
     private DbController db = new DbController(NAME, URL);
+    static SchedulerFactory schedulerFactory = null; 
+    static Scheduler scheduler = null;
 
     // Hashmap of GameEvents stores their info before they are added to the database
     HashMap<String, GameEvent> games = new HashMap<>();
 
+
     public static void main(String[] args) throws Exception {
 
-        // Create a new JDABuilder, load token from file, and empty list of intents
+
+        schedulerFactory = new StdSchedulerFactory(); 
+        scheduler = schedulerFactory.getScheduler();
+
+        // Create a new JDA, load token from file, and empty list of intents
         JDA jda = JDABuilder.createLight(Files.readString(java.nio.file.Path.of(".token")), Collections.emptyList())
                 .addEventListeners(new App())
                 .build();
@@ -74,19 +86,6 @@ public class App extends ListenerAdapter {
         );
 
         commands.addCommands(
-                Commands.slash("gregvent", "Create an event")
-                        .setContexts(InteractionContextType.ALL)
-                        .setIntegrationTypes(IntegrationType.ALL) // can be installed anywhere
-                        .addOption(STRING, "name", "The Title", true)
-                        .addOption(STRING, "description", "A short description", true)
-                        .addOption(INTEGER, "max_players", "integer value", true)
-                        .addOption(STRING, "start_time", "begining", true)
-                        .addOption(STRING, "end_time", "the close", true)
-                        .addOption(STRING, "signup_close_time", "optional", false)
-                        .addOption(STRING, "timezone", "optional if user timezone is set. '/greg_help tz'", false)
-                        .addOption(STRING, "repeats", "daily, weekly, biweekly, or monthly (optional)", false));
-
-        commands.addCommands(
                 Commands.slash("event_modal", "Create an event with a modal")
                         .setContexts(InteractionContextType.ALL)
                         .setIntegrationTypes(IntegrationType.ALL));
@@ -99,7 +98,6 @@ public class App extends ListenerAdapter {
                         .addOption(STRING, "topic", "The topic to get help with", false));
 
         // Privileged commands
-        // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         commands.addCommands(
                 Commands.slash("info", "DESCRIPTION")
                         .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.BAN_MEMBERS)));
@@ -110,6 +108,7 @@ public class App extends ListenerAdapter {
 
         // Send the commands to Discord
         commands.queue();
+
     }
 
     // Slash Command Listener
@@ -127,9 +126,10 @@ public class App extends ListenerAdapter {
             case "greg_help":
                 switch (event.getOption("topic").getAsString()) {
                     case "timezones":
-                        event.reply("# Timezones\n" 
-                            + "Visit: https://docs.oracle.com/cd/E72987_01/wcs/tag-ref/MISC/TimeZones.html \n"
-                            + "Find your **full** Time Zone ID. You cannot, for example, use \"PST\", you must use \"America/Los_Angeles\"").setEphemeral(true).queue();
+                        event.reply("# Timezones\n"
+                                + "Visit: https://docs.oracle.com/cd/E72987_01/wcs/tag-ref/MISC/TimeZones.html \n"
+                                + "Find your **full** Time Zone ID. You cannot, for example, use \"PST\", you must use \"America/Los_Angeles\"")
+                                .setEphemeral(true).queue();
                         break;
 
                     default:
@@ -137,10 +137,6 @@ public class App extends ListenerAdapter {
                         event.reply("I don't know that one.").setEphemeral(true).queue();
                         break;
                 }
-
-            case "gregvent":
-                createEvent(event);
-                break;
 
             case "event_modal":
                 createModalOne(event);
@@ -226,7 +222,10 @@ public class App extends ListenerAdapter {
 
             case "event_modal_2":
 
-                // TODO check timezone
+                GameEvent game = null;
+
+                // TODO check timezone. This isn't working, idk why it's not throwing an
+                // exception
                 ZoneId zone = null;
                 String timezone = "EMPTY";
                 try {
@@ -245,12 +244,17 @@ public class App extends ListenerAdapter {
 
                 } catch (Exception e) {
                     event.reply("**Something went wrong parsing the Date-Times you entered**").setEphemeral(true);
+                    return;
+                }
+
+                if (start == 0 || end == 0 || signup == 0) {
+                    event.reply("**Something went wrong parsing the Date-Times you entered**").setEphemeral(true);
+                    return;
                 }
 
                 if (games.containsKey(event.getUser().getId())) {
 
-                    // TODO update the hashmap with the new values
-                    GameEvent game = games.get(event.getUser().getId());
+                    game = games.get(event.getUser().getId());
 
                     game.timezone = timezone;
                     game.startTime = start;
@@ -266,9 +270,13 @@ public class App extends ListenerAdapter {
                 // TODO check if the game is in the database
 
                 // DEBUG
-                event.reply(games.get(event.getUser().getId()).toString()).setEphemeral(true).queue();
+                event.reply(game.toString()).setEphemeral(true).queue();
 
                 // TODO add to the database
+                db.addEvent(game);
+
+                // TODO make initial post to the event feed channel
+                makeGamePost(game, event.getJDA());
 
                 // Remove the game from the hashmap
                 games.remove(event.getUser().getId());
@@ -289,39 +297,11 @@ public class App extends ListenerAdapter {
                 + "**database:** " + db.getURL() + "\n"
                 + "**bot id:** " + event.getJDA().getSelfUser().getId() + "\n"
                 + "**bot name:** " + event.getJDA().getSelfUser().getName() + "\n"
-                + "**events in memory:** " + games.size() + "\n";
-        // + "events in database: " + db.getEventCount() + "\n" // TODO
-        // + "users in database: " + db.getUserCount() + "\n";
+                + "**games in memory:** " + games.size() + "\n"
+                + "**events in database: **" + db.getEventCount() + "\n";
+        // + "users in database: " + db.getUserCount() + "\n"; TODO
 
         event.reply(info).queue();
-    }
-
-    // TODO this function is unused
-    private void createEvent(SlashCommandInteractionEvent event) {
-        String name = event.getOption("name").getAsString();
-        String description = event.getOption("description").getAsString();
-
-        // TODO convert to unix time
-        String start_time = event.getOption("start_time").getAsString();
-        String end_time = event.getOption("end_time").getAsString();
-        String signup_close_time = event.getOption("signup_close_time").getAsString();
-
-        String repeats = event.getOption("repeats").getAsString();
-        int max_players = event.getOption("max_players").getAsInt();
-        String channel_id = event.getChannel().getId();
-        String guild_id = event.getGuild().getId();
-        String owner = event.getUser().getId();
-
-        // event.reply(name + "\n" +
-        // description + "\n" +
-        // start_time + "\n" +
-        // end_time + "\n" +
-        // signup_close_time + "\n" +
-        // repeats + "\n" +
-        // max_players + "\n" +
-        // channel_id + "\n" +
-        // guild_id + "\n" +
-        // owner).queue();
     }
 
     @Override
@@ -332,9 +312,9 @@ public class App extends ListenerAdapter {
         try {
             eventID = split[1];
         } catch (Exception e) {
-           // this means the button didn't have an eventID appended.
-           // no worries 
-        } 
+            // this means the button didn't have an eventID appended.
+            // no worries
+        }
         switch (buttonID) {
             case "modal_1_continue":
                 createModalTwo(event);
@@ -400,13 +380,15 @@ public class App extends ListenerAdapter {
     public void createModalTwo(ButtonInteractionEvent event) {
         event.replyModal(Modal.create("event_modal_2", "Create an event, part 2")
                 .addComponents(
-                        ActionRow.of(TextInput.create("timezone", "Timezone Code, /greg_help timezones", TextInputStyle.SHORT)
+                        ActionRow.of(TextInput
+                                .create("timezone", "Timezone Code, /greg_help timezones", TextInputStyle.SHORT)
                                 .setPlaceholder("UTC")
                                 .setMinLength(2)
                                 .setMaxLength(20)
                                 .build()),
                         ActionRow.of(TextInput
-                                .create("start_time", "Starts at 'YY-MM-DD-HH-mm' (24 hour time)", TextInputStyle.SHORT)
+                                .create("start_time", "Starts at 'YYYY-MM-DD-HH-mm' (24 hour time)",
+                                        TextInputStyle.SHORT)
                                 .setPlaceholder("2026-01-01-13-00")
                                 .setMinLength(16)
                                 .setMaxLength(16)
@@ -426,21 +408,37 @@ public class App extends ListenerAdapter {
                 .build()).queue();
     }
 
-    // TODO format this
-    public long stringToUnixTime(String str, ZoneId zone) {
-        // YYYY-MM-DD-HH-mm
+    private long stringToUnixTime(String str, ZoneId zone) {
+        // TODO check string formatting
 
-        // Define a formatter that matches the input pattern
+        // Formatter that matches the input pattern
         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd-HH-mm");
 
-        // Parse the input date string to LocalDateTime
-        LocalDateTime localDateTime = LocalDateTime.parse(str, formatter);
-
-        // Convert to ZonedDateTime
-        ZonedDateTime zonedDateTime = localDateTime.atZone(zone);
+        ZonedDateTime zonedDateTime = LocalDateTime.parse(str, formatter).atZone(zone);
 
         // Convert to Unix timestamp (seconds since epoch)
         return zonedDateTime.toEpochSecond();
 
     }
+
+    private void makeGamePost(GameEvent game, JDA jda) {
+
+        String post = "# " + game.name + "\n"
+                + "Run by `" + game.owner + "`\n"
+                // + "## Details\n"
+                + "Time: <t:" + game.startTime + " to <t:" + game.endTime + ":t>`\n"
+                + "Game Repeats: `" + game.repeats + "`\n"
+                + "Seats: `" + game.maxPlayers + "`\n"
+                // + "Timezone: " + game.timezone + "\n"
+                + "Sign-ups closes @ : <t:" + game.closeTime + ":f>\n"
+                // + "## Description \n"
+                + ">>> " + game.description + "\n"
+                + "**Accepted: ..**\n"
+                + "**Declined: ..**\n";
+
+        jda.getTextChannelById(EVENT_FEED_ID).sendMessage(post).addActionRow(
+            Button.success("GAMEID:BUTTONID", "Accept"),
+            Button.danger("GAMEID:BUTTONID", "Decline")).queue();
+    }
+
 }

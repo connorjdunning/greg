@@ -6,7 +6,6 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.sql.ResultSet;
 
 class DbController {
     private final String NAME;
@@ -89,6 +88,86 @@ class DbController {
 
         return null;
     }
+
+    public void addEvent(GameEvent game) {
+        Connection conn = null;
+        PreparedStatement toInsert = null;
+
+        try {
+            conn = DriverManager.getConnection(URL);
+
+            // id INTEGER PRIMARY KEY, 
+            // owner STRING, 
+            // owner_id INTEGER, 
+            // name STRING, 
+            // description STRING, 
+            // start_time INTEGER, 
+            // end_time INTEGER, 
+            // close_time INTEGER, 
+            // repeats STRING, 
+            // max_players INTEGER, 
+            // channels BOOLEAN, 
+            // timezone STRING);");
+
+            toInsert = conn.prepareStatement("INSERT INTO events (id, owner, owner_id, name, description, start_time, end_time, close_time, repeats, max_players, channels, timezone) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);");
+
+            toInsert.setInt(1, game.id);
+            toInsert.setString(2, game.owner);
+            toInsert.setLong(3, game.owner_id); 
+            toInsert.setString(4, game.name);
+            toInsert.setString(5, game.description);
+            toInsert.setLong(6, game.startTime);
+            toInsert.setLong(7, game.endTime);
+            toInsert.setLong(8, game.closeTime);
+            toInsert.setString(9, game.repeats);
+            toInsert.setInt(10, game.maxPlayers);
+            toInsert.setBoolean(11, game.temp_channels);
+            toInsert.setString(12, game.timezone);
+            
+            toInsert.executeUpdate();
+
+
+        } catch (Exception e) {
+            e.printStackTrace(System.err);
+        } finally {
+            try {
+                toInsert.close();
+                conn.close();
+            } catch (Exception e) {
+                e.printStackTrace(System.err);
+            }
+        }
+
+    }
+
+    public int getEventCount() {
+        Connection conn = null;
+        Statement stmt = null;
+
+        try {
+            conn = DriverManager.getConnection(URL);
+            stmt = conn.createStatement();
+            stmt.setQueryTimeout(30); // set timeout to 30 sec.
+
+            ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM events;");
+
+            return rs.getInt(1);
+
+        } catch (SQLException e) {
+            System.err.println(e.getMessage());
+
+        } finally {
+            try {
+                stmt.close();
+                conn.close();
+
+            } catch (SQLException e) {
+                System.err.println(e.getMessage());
+            }
+        }
+        return -34404;
+    }
+
 
     // utter garbage, probably remove
     ResultSet CallandReturn(String statement) {
