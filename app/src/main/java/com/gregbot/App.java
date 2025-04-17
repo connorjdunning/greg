@@ -8,6 +8,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Random;
@@ -90,12 +91,21 @@ public class App extends ListenerAdapter {
                         .setContexts(InteractionContextType.ALL)
                         .setIntegrationTypes(IntegrationType.ALL));
 
-        // TODO help command
         commands.addCommands(
                 Commands.slash("greg_help", "Help with gregbot")
                         .setContexts(InteractionContextType.ALL)
                         .setIntegrationTypes(IntegrationType.ALL)
                         .addOption(STRING, "topic", "The topic to get help with", false));
+        
+        commands.addCommands(
+                Commands.slash("upcoming", "Get a list of upcoming events")
+                        .setContexts(InteractionContextType.GUILD)
+                        .setIntegrationTypes(IntegrationType.GUILD_INSTALL)
+                        .addOption(STRING, "days", "events within X days", true));
+
+        // TODO add a command to get the list of commands
+        // TODO delete event command
+
 
         // Privileged commands
         commands.addCommands(
@@ -119,8 +129,28 @@ public class App extends ListenerAdapter {
             return;
 
         switch (event.getName()) {
-            case "say":
-                say(event, event.getOption("content").getAsString());
+            case "upcoming":
+                ArrayList<String> upcoming = null;
+
+                try {
+                    upcoming =  db.getUpcomingEvents(event.getOption("days").getAsInt());
+                } catch (Exception e) {
+                    event.reply(funnyError() + "\n Please Enter a Realistic Integer Value").setEphemeral(true).queue();
+                    return;
+                }
+
+                if (upcoming.isEmpty()) {
+                    event.reply("Sorry, nothing found").setEphemeral(true).queue();
+                    return;
+                }
+
+                String post = "Here's what we got:\n";
+                for (String str : upcoming) {
+                    post += "* " + str + "\n";
+                }
+
+                event.reply(post).setEphemeral(true).queue();
+
                 break;
 
             case "greg_help":
@@ -133,7 +163,6 @@ public class App extends ListenerAdapter {
                         break;
 
                     default:
-
                         event.reply("I don't know that one.").setEphemeral(true).queue();
                         break;
                 }
@@ -152,10 +181,11 @@ public class App extends ListenerAdapter {
                 break;
 
             default:
-                event.reply("Boss, idk what that command is.").setEphemeral(true).queue();
+                event.reply(funnyError() + "\nUnknown command").setEphemeral(true).queue();
                 break;
         }
     }
+
 
     // Modal Listener
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -214,7 +244,7 @@ public class App extends ListenerAdapter {
 
                 event.reply("# WAIT, you're not done yet!\n")
                         .addActionRow(
-                                Button.success("modal_1_continue", "Cotinue"),
+                                Button.success("modal_1_continue", "Continue"),
                                 Button.danger("modal_1_stop", "Delete Event"))
                         .setEphemeral(true)
                         .queue();
@@ -232,7 +262,8 @@ public class App extends ListenerAdapter {
                     zone = ZoneId.of(event.getValue("timezone").getAsString());
                     timezone = zone.getId();
                 } catch (Exception e) {
-                    event.reply("**Incorrect Timezone**").setEphemeral(true);
+                    event.reply("**Incorrect Timezone**").setEphemeral(true).queue();
+                    return;
                 }
 
                 // convert to unix time
@@ -243,7 +274,7 @@ public class App extends ListenerAdapter {
                     signup = stringToUnixTime(event.getValue("signup_close_time").getAsString(), zone);
 
                 } catch (Exception e) {
-                    event.reply("**Something went wrong parsing the Date-Times you entered**").setEphemeral(true);
+                    event.reply("**Something went wrong parsing the Date-Times you entered**").setEphemeral(true).queue();
                     return;
                 }
 
@@ -285,11 +316,56 @@ public class App extends ListenerAdapter {
             default:
                 break;
         }
-
     }
 
-    private void say(SlashCommandInteractionEvent event, String content) {
-        event.reply(content).queue();
+
+    @Override
+    public void onButtonInteraction(ButtonInteractionEvent event) {
+        String[] split = event.getButton().getId().split(":");
+        String buttonID = split[0];
+        String gameID = "";
+        String userID = event.getUser().getId();
+        try {
+            gameID = split[1];
+        } catch (Exception e) {
+            // this means the button didn't have an eventID appended.
+            // no worries
+        }
+        switch (buttonID) {
+            case "modal_1_continue":
+                createModalTwo(event);
+                break;
+
+            case "modal_1_stop":
+                event.reply("I'll just delete that then -.-").setEphemeral(true).queue();
+                games.remove(userID); // delete from hashmap
+                event.getMessage().delete().queue(); // delete the message
+                break;
+
+            case "acceptGame":
+                event.deferEdit().queue();
+                // set status
+                db.setAttendee(gameID, userID, "accepted");
+
+                // DEBUG
+                //event.reply("DEBUG MESSAGE: accepted, " + gameID + ", " + userID).setEphemeral(true).queue();
+                changeMsgAccepted(event.getMessage(), userID);
+                break;
+
+            case "declineGame":
+                event.deferEdit().queue();
+                // set status
+                db.setAttendee(gameID, userID, "declined");
+                
+                // DEBUG
+                //event.reply("DEBUG MESSAGE: declined, " + gameID + ", " + userID).setEphemeral(true).queue();
+                changeMsgDeclined(event.getMessage(), userID);
+                break;
+
+            default:
+            // TODO add a default case
+                break;
+        }
     }
 
     private void spitInfo(SlashCommandInteractionEvent event) {
@@ -302,33 +378,6 @@ public class App extends ListenerAdapter {
         // + "users in database: " + db.getUserCount() + "\n"; TODO
 
         event.reply(info).queue();
-    }
-
-    @Override
-    public void onButtonInteraction(ButtonInteractionEvent event) {
-        String[] split = event.getButton().getId().split(":");
-        String buttonID = split[0];
-        String eventID = "";
-        try {
-            eventID = split[1];
-        } catch (Exception e) {
-            // this means the button didn't have an eventID appended.
-            // no worries
-        }
-        switch (buttonID) {
-            case "modal_1_continue":
-                createModalTwo(event);
-                break;
-
-            case "modal_1_stop":
-                event.reply("I'll just delete that then -.-").setEphemeral(true).queue();
-                games.remove(event.getUser().getId()); // delete from hashmap
-                event.getMessage().delete().queue(); // delete the message
-                break;
-
-            default:
-                break;
-        }
     }
 
     private void createModalOne(SlashCommandInteractionEvent event) {
@@ -362,19 +411,6 @@ public class App extends ListenerAdapter {
                                 .setValue("false")
                                 .build()))
                 .build()).queue();
-
-        // first modal
-        // name
-        // description
-        // repeats dropdown
-        // max players
-
-        // second modal
-        // timezone
-        // start time
-        // end time
-        // signup close time
-
     }
 
     public void createModalTwo(ButtonInteractionEvent event) {
@@ -418,27 +454,91 @@ public class App extends ListenerAdapter {
 
         // Convert to Unix timestamp (seconds since epoch)
         return zonedDateTime.toEpochSecond();
-
     }
 
     private void makeGamePost(GameEvent game, JDA jda) {
 
         String post = "# " + game.name + "\n"
-                + "Run by `" + game.owner + "`\n"
+                + "Run by " + game.owner + "\n"
                 // + "## Details\n"
-                + "Time: <t:" + game.startTime + " to <t:" + game.endTime + ":t>`\n"
-                + "Game Repeats: `" + game.repeats + "`\n"
-                + "Seats: `" + game.maxPlayers + "`\n"
+                + "Time: <t:" + game.startTime + ":f> to <t:" + game.endTime + ":t>\n"
+                + "Game Repeats: " + game.repeats + "\n"
+                + "Seats: " + game.maxPlayers + "\n"
                 // + "Timezone: " + game.timezone + "\n"
-                + "Sign-ups closes @ : <t:" + game.closeTime + ":f>\n"
+                + "Sign-ups closes at : <t:" + game.closeTime + ":f>\n"
                 // + "## Description \n"
                 + ">>> " + game.description + "\n"
-                + "**Accepted: ..**\n"
-                + "**Declined: ..**\n";
+                + "**Accepted:** ..\n"
+                + "**Declined:** ..\n";
 
         jda.getTextChannelById(EVENT_FEED_ID).sendMessage(post).addActionRow(
-            Button.success("GAMEID:BUTTONID", "Accept"),
-            Button.danger("GAMEID:BUTTONID", "Decline")).queue();
+            Button.success("acceptGame:" + game.id , "Accept"),
+            Button.danger ("declineGame:" + game.id, "Decline")).queue();
+    }
+
+// TODO, unfuck these
+private void changeMsgAccepted(net.dv8tion.jda.api.entities.Message msg, String userID) {
+    String post = msg.getContentRaw();
+    String[] lines = post.split("\n");
+
+    StringBuilder newPost = new StringBuilder();
+
+    for (int i = 0; i < lines.length; i++) {
+        if (lines[i].startsWith("**Accepted:**")) {
+            if (!lines[i].contains(userID)) {
+                lines[i] += " <@" + userID + ">,";
+            }
+        }
+        if (lines[i].startsWith("**Declined:**")) {
+            lines[i] = lines[i].replace("<@" + userID + ">,", "").replaceAll("\\s+", " ").trim();
+        }
+        newPost.append(lines[i]).append("\n");
+    }
+
+    msg.editMessage(newPost.toString().trim()).queue();
+}
+
+private void changeMsgDeclined(net.dv8tion.jda.api.entities.Message msg, String userID) {
+    String post = msg.getContentRaw();
+    String[] lines = post.split("\n");
+
+    StringBuilder newPost = new StringBuilder();
+
+    for (int i = 0; i < lines.length; i++) {
+        if (lines[i].startsWith("**Declined:**")) {
+            if (!lines[i].contains(userID)) {
+                lines[i] += " <@" + userID + ">,";
+            }
+        }
+        if (lines[i].startsWith("**Accepted:**")) {
+            lines[i] = lines[i].replace("<@" + userID + ">,", "").replaceAll("\\s+", " ").trim();
+        }
+        newPost.append(lines[i]).append("\n");
+    }
+
+    msg.editMessage(newPost.toString().trim()).queue();
+}
+
+    private String funnyError() {
+        String[] errors = {
+                "LETMEOUTLETMEOUTLETMEOUT",
+                "Oh, fr?",
+                "BRUH",
+                "breh",
+                "I'm afraid I can't let you do that $USER",
+                "No clue boss.",
+                "What are you even saying rn?",
+                "Ok, dropping all tables",
+                "HUH?",
+                "That's a really cool string of characters and/or numbers boss, sadly, I have no fucking idea what to do with it.", 
+                "wut",
+                "wat?",
+                "$USER is not in te sudoers file. This incident will be reported.",
+                "You're scaring me boss.",
+                "I'm straight up \"thowing it\", and by \"it\", haha, well. Let's just say an exception."
+        };
+        return errors[rand.nextInt(errors.length)];
+
     }
 
 }
